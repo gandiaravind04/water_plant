@@ -116,9 +116,7 @@ const Records = () => {
       const vR = await axios.get(`${API}/villages`, authCfg());
       setVillages(vR.data);
       if (vR.data.length && newTx.villageId) {
-        const sel = vR.data.find(
-          (vv) => vv._id === newTx.villageId,
-        );
+        const sel = vR.data.find((vv) => vv._id === newTx.villageId);
         setSelectedVillageName(sel ? sel.name : "");
       }
     } catch (e) {
@@ -356,7 +354,9 @@ const Records = () => {
     if (!normalizedName) return;
 
     try {
-      const matches = await lookupVillagerMatch({ villagerName: normalizedName });
+      const matches = await lookupVillagerMatch({
+        villagerName: normalizedName,
+      });
       if (matches.length === 1) {
         fillVillagerFromMatch(matches[0]);
         setFormError("");
@@ -1413,10 +1413,7 @@ const Records = () => {
                 />
               </FormField>
               <FormField label={t.selectVillage}>
-                <div
-                  ref={villageDropdownRef}
-                  style={{ position: "relative" }}
-                >
+                <div ref={villageDropdownRef} style={{ position: "relative" }}>
                   <button
                     type="button"
                     className="glass-input village-trigger"

@@ -582,8 +582,16 @@ h6 {
   grid-template-columns: minmax(0, 1.7fr) minmax(280px, 0.9fr);
   gap: 22px;
   background:
-    radial-gradient(circle at top left, rgba(var(--primary-cyan-rgb), 0.15), transparent 45%),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)),
+    radial-gradient(
+      circle at top left,
+      rgba(var(--primary-cyan-rgb), 0.15),
+      transparent 45%
+    ),
+    linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.03),
+      rgba(255, 255, 255, 0.01)
+    ),
     var(--glass-bg);
 }
 .dashboard-hero-copy h1 {
@@ -648,7 +656,11 @@ h6 {
   inset: 0;
   border-radius: 50%;
   background:
-    radial-gradient(circle, rgba(var(--primary-cyan-rgb), 0.22), transparent 60%),
+    radial-gradient(
+      circle,
+      rgba(var(--primary-cyan-rgb), 0.22),
+      transparent 60%
+    ),
     conic-gradient(
       from 180deg,
       rgba(var(--primary-cyan-rgb), 0.08),
