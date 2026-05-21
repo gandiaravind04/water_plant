@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import axios from "axios";
-import { Droplet, Lock, User } from "lucide-react";
+import { Droplet, LoaderCircle, Lock, User } from "lucide-react";
 
 const Register = () => {
   const [username, setUsername] = useState("");
@@ -208,7 +208,8 @@ const Register = () => {
             style={{ width: "100%", marginTop: "10px" }}
             disabled={loading}
           >
-            {loading ? "Creating account..." : "Create Admin Account"}
+            {loading && <LoaderCircle size={16} className="inline-spinner" />}
+            <span>{loading ? "Creating account..." : "Create Admin Account"}</span>
           </button>
         </form>
 

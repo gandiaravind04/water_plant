@@ -9,11 +9,13 @@ import {
   Sun,
   Moon,
   Languages,
+  LoaderCircle,
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
 
 const Settings = () => {
-  const { theme, toggleTheme, lang, toggleLang, t } = useApp();
+  const { theme, toggleTheme, lang, toggleLang, t, fontSize, setFontSize } =
+    useApp();
   const [villages, setVillages] = useState([]);
   const [newVillage, setNewVillage] = useState("");
   const [error, setError] = useState("");
@@ -200,6 +202,35 @@ const Settings = () => {
               {theme === "dark" ? t.lightMode : t.darkMode}
             </button>
           </div>
+          {/* Font size */}
+          <div style={{ flex: "1", minWidth: "200px" }}>
+            <label
+              style={{
+                display: "block",
+                fontSize: "13px",
+                color: "var(--text-secondary)",
+                marginBottom: "8px",
+              }}
+            >
+              {t.fontSizeLabel}
+            </label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                type="number"
+                min="12"
+                max="28"
+                value={fontSize}
+                onChange={(e) => setFontSize(Number(e.target.value))}
+                className="glass-input"
+                style={{ width: "110px" }}
+              />
+              <div
+                style={{ alignSelf: "center", color: "var(--text-secondary)" }}
+              >
+                {t.fontSizeUnit}
+              </div>
+            </div>
+          </div>
           {/* Language Toggle */}
           <div style={{ flex: "1", minWidth: "200px" }}>
             <label
@@ -286,7 +317,8 @@ const Settings = () => {
             style={{ height: "46px", padding: "0 28px" }}
             disabled={priceLoading}
           >
-            {priceLoading ? t.saving : t.saveCanPrice}
+            {priceLoading && <LoaderCircle size={16} className="inline-spinner" />}
+            <span>{priceLoading ? t.saving : t.saveCanPrice}</span>
           </button>
         </form>
       </div>
@@ -350,7 +382,8 @@ const Settings = () => {
               style={{ width: "100%" }}
               disabled={loading}
             >
-              {loading ? t.adding : t.addVillage}
+              {loading && <LoaderCircle size={16} className="inline-spinner" />}
+              <span>{loading ? t.adding : t.addVillage}</span>
             </button>
           </form>
         </div>

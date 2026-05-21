@@ -1,9 +1,13 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const subTransactionSchema = new mongoose.Schema({
+  requestId: {
+    type: String,
+    trim: true,
+  },
   actionType: {
     type: String,
-    enum: ['refill', 'extra'],
+    enum: ["issue", "refill", "extra", "return"],
     required: true,
   },
   cansCount: {
@@ -14,6 +18,23 @@ const subTransactionSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  additionalDue: {
+    type: Number,
+    default: 0,
+  },
+  resultingDue: {
+    type: Number,
+    default: 0,
+  },
+  refillMode: {
+    type: String,
+    enum: ["exchange", "net"],
+    default: "exchange",
+  },
+  emptiesReturned: {
+    type: Number,
+    default: 0,
+  },
   timestamp: {
     type: Date,
     default: Date.now,
@@ -21,6 +42,12 @@ const subTransactionSchema = new mongoose.Schema({
 });
 
 const transactionSchema = new mongoose.Schema({
+  clientRequestId: {
+    type: String,
+    unique: true,
+    sparse: true,
+    trim: true,
+  },
   villagerName: {
     type: String,
     required: true,
@@ -33,7 +60,7 @@ const transactionSchema = new mongoose.Schema({
   },
   village: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Village',
+    ref: "Village",
     required: true,
   },
   cansIssued: {
@@ -66,12 +93,12 @@ const transactionSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'returned', 'overdue', 'partially_returned'],
-    default: 'pending',
+    enum: ["pending", "returned", "overdue", "partially_returned"],
+    default: "pending",
   },
   subTransactions: [subTransactionSchema],
 });
 
-const Transaction = mongoose.model('Transaction', transactionSchema);
+const Transaction = mongoose.model("Transaction", transactionSchema);
 
 export default Transaction;

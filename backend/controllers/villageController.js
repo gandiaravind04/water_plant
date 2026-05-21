@@ -27,7 +27,10 @@ export const addVillage = async (req, res) => {
     const trimmedName = name.trim();
 
     // Check if village already exists
-    const existing = await Village.findOne({ name: trimmedName });
+    const existing = await Village.findOne({ name: trimmedName }).collation({
+      locale: "en",
+      strength: 2,
+    });
     if (existing) {
       return res.status(400).json({ message: 'Village already exists' });
     }
@@ -35,6 +38,9 @@ export const addVillage = async (req, res) => {
     const village = await Village.create({ name: trimmedName });
     res.status(201).json(village);
   } catch (error) {
+    if (error.code === 11000) {
+      return res.status(400).json({ message: 'Village already exists' });
+    }
     res.status(500).json({ message: error.message });
   }
 };

@@ -1,6 +1,8 @@
 import express from 'express';
 import {
   getTransactions,
+  getTransactionSummary,
+  lookupVillager,
   createTransaction,
   returnCans,
   refillCans,
@@ -18,6 +20,8 @@ router.route('/')
   .get(getTransactions)
   .post(createTransaction);
 
+router.get('/summary', getTransactionSummary);
+router.get('/lookup', lookupVillager);
 router.post('/:id/return', returnCans);
 router.post('/:id/refill', refillCans);
 router.post('/:id/extra', addExtraCans);

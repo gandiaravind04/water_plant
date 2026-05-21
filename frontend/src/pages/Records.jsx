@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import axios from "axios";
 import {
   Search,
-  Plus,
   RotateCcw,
   PlusCircle,
   CheckCircle,
@@ -17,22 +16,11 @@ import {
   Clock,
   Droplet,
   IndianRupee,
+  LoaderCircle,
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
 
 const API = import.meta.env.VITE_API_URL + "/api";
-
-/* ─── WhatsApp link helper ───────────────────────────────────────────────── */
-const makeWhatsAppLink = (tx) => {
-  const rem = tx.cansIssued - tx.cansReturned;
-  const late = new Date() > new Date(tx.dueAt);
-  const msg = late
-    ? `హలో *${tx.villagerName}* గారు, ఇది *మంజీరా వాటర్ ప్లాంట్* నుండి రిమైండర్. మీరు తీసుకెళ్లిన *${rem} వాటర్ క్యాన్లు* తిరిగి ఇవ్వాల్సిన సమయం పూర్తయింది. దయచేసి వాటిని ప్లాంట్ వద్ద సమర్పించవలసిందిగా కోరుతున్నాము. ధన్యవాదాలు!`
-    : `హలో *${tx.villagerName}* గారు, ఇది *మంజీరా వాటర్ ప్లాంట్* నుండి సమాచారం. మీరు తీసుకెళ్లిన *${rem} వాటర్ క్యాన్లు* తిరిగి ఇవ్వడానికి సమయం ముగుస్తోంది. దయచేసి గమనించగలరు. ధన్యవాదాలు!`;
-  let ph = tx.phone.trim().replace(/\D/g, "");
-  if (ph.length === 10) ph = "91" + ph;
-  return `https://api.whatsapp.com/send?phone=${ph}&text=${encodeURIComponent(msg)}`;
-};
 
 /* ─── Status helpers ─────────────────────────────────────────────────────── */
 const statusColor = (s) =>
@@ -46,14 +34,20 @@ const statusColor = (s) =>
    MAIN COMPONENT
 ════════════════════════════════════════════════════════════════════════════ */
 const Records = () => {
-  const { t } = useApp();
+  const { t, lang } = useApp();
   const [transactions, setTransactions] = useState([]);
   const [villages, setVillages] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [recordsTab, setRecordsTab] = useState("pending");
   const [filterStatus, setFilterStatus] = useState("all");
   const [searchParams, setSearchParams] = useSearchParams();
   const [canPrice, setCanPrice] = useState(20);
+  const [page, setPage] = useState(1);
+  const [limit] = useState(20);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   /* preview bottom-sheet */
   const [previewTx, setPreviewTx] = useState(null);
@@ -78,14 +72,30 @@ const Records = () => {
   const [returnCount, setReturnCount] = useState(1);
   const [actionDetails, setActionDetails] = useState({
     cansCount: 1,
+    returnedCount: 1,
     payment: 20,
     due: 0,
   });
+  const [refillMode, setRefillMode] = useState("exchange");
+  const [returnPayment, setReturnPayment] = useState(0);
+  const [returnDue, setReturnDue] = useState(0);
+  const [returnPaymentTouched, setReturnPaymentTouched] = useState(false);
+  const [addingVillageLoading, setAddingVillageLoading] = useState(false);
+  const [villageDropdownOpen, setVillageDropdownOpen] = useState(false);
+  const [villageSearch, setVillageSearch] = useState("");
+  const [selectedVillageName, setSelectedVillageName] = useState("");
   const [formError, setFormError] = useState("");
+  const [submitAction, setSubmitAction] = useState("");
+  const villageDropdownRef = useRef(null);
 
   const authCfg = () => ({
     headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
   });
+
+  const createRequestId = () =>
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
   /* ── data fetching ────────────────────────────────────────────────────── */
   const fetchCanPrice = async () => {
@@ -101,28 +111,153 @@ const Records = () => {
     }
   };
 
-  const fetchData = async () => {
+  const fetchVillages = async () => {
     try {
-      setLoading(true);
-      const [txR, vR] = await Promise.all([
-        axios.get(`${API}/cans`, authCfg()),
-        axios.get(`${API}/villages`, authCfg()),
-      ]);
-      setTransactions(txR.data);
+      const vR = await axios.get(`${API}/villages`, authCfg());
       setVillages(vR.data);
-      if (vR.data.length && !newTx.villageId)
-        setNewTx((p) => ({ ...p, villageId: vR.data[0]._id }));
-      await fetchCanPrice();
+      if (vR.data.length && newTx.villageId) {
+        const sel = vR.data.find(
+          (vv) => vv._id === newTx.villageId,
+        );
+        setSelectedVillageName(sel ? sel.name : "");
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const fetchTransactions = async (pageNumber = 1, reset = false) => {
+    try {
+      if (pageNumber === 1) {
+        setLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
+
+      const txR = await axios.get(
+        `${API}/cans?page=${pageNumber}&limit=${limit}`,
+        authCfg(),
+      );
+      const nextTransactions = txR.data.transactions || txR.data;
+
+      setTransactions((prev) =>
+        reset ? nextTransactions : [...prev, ...nextTransactions],
+      );
+      setPage(pageNumber);
+      setHasMore(txR.data.hasMore ?? nextTransactions.length === limit);
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   };
 
+  const makeWhatsAppLink = (tx) => {
+    const rem = tx.cansIssued - tx.cansReturned;
+    const phRaw = tx.phone?.trim().replace(/\D/g, "") || "";
+    let ph = phRaw;
+    if (ph.length === 10) ph = "91" + ph;
+    const locationUrl = "https://maps.app.goo.gl/xfSYygfUVtkaB3kH7";
+    const msg =
+      lang === "te"
+        ? `హలో ${tx.villagerName} గారు, ఇది మంజీరా వాటర్ ప్లాంట్ (Manjira Plant) నుండి సమాచారం. మీరు తీసుకెళ్లిన ${rem} వాటర్ క్యాన్లు తిరిగి ఇవ్వాలని కోరుకుంటున్నాం. ప్లాంట్ లోకేషన్: ${locationUrl} దయచేసి గమనించగలరు. ధన్యవాదాలు!`
+        : `Hello ${tx.villagerName}, this is Manjira Water Plant. We kindly request return of the ${rem} water cans you took. Plant location: ${locationUrl} Thank you!`;
+    return `https://api.whatsapp.com/send?phone=${ph}&text=${encodeURIComponent(msg)}`;
+  };
+
+  const fillVillagerFromMatch = (match) => {
+    if (!match) return;
+
+    setNewTx((prev) => ({
+      ...prev,
+      villagerName: match.villagerName || prev.villagerName,
+      phone: match.phone || prev.phone,
+      villageId: match.village?._id || "",
+    }));
+
+    setSelectedVillageName(match.village?.name || "");
+  };
+
+  const lookupVillagerMatch = async (params) => {
+    const response = await axios.get(`${API}/cans/lookup`, {
+      ...authCfg(),
+      params,
+    });
+    return response.data?.matches || [];
+  };
+
   useEffect(() => {
-    fetchData();
+    fetchTransactions(1, true);
+    fetchCanPrice();
+    fetchVillages();
   }, []);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedSearch(searchInput.trim().toLowerCase());
+    }, 300);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [searchInput]);
+
+  useEffect(() => {
+    setFilterStatus("all");
+    setExpandedRow(null);
+    setPreviewTx(null);
+  }, [recordsTab]);
+
+  useEffect(() => {
+    if (!villageDropdownOpen) return undefined;
+
+    const handleClickOutside = (event) => {
+      if (
+        villageDropdownRef.current &&
+        !villageDropdownRef.current.contains(event.target)
+      ) {
+        setVillageDropdownOpen(false);
+        setVillageSearch("");
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [villageDropdownOpen]);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      if (loading || loadingMore || !hasMore) return;
+      if (
+        window.innerHeight + window.scrollY >=
+        document.documentElement.scrollHeight - 240
+      ) {
+        fetchTransactions(page + 1, false);
+      }
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, [page, hasMore, loading, loadingMore]);
+
+  // Auto-calc return payment and due based on selectedTx, returnCount and canPrice
+  useEffect(() => {
+    if (activeModal !== "return" || !selectedTx) return;
+    const amtDue = Number(selectedTx.amountDue || 0);
+    if (!returnPaymentTouched) {
+      const defaultPay = Number(returnCount || 0) * Number(canPrice || 0);
+      setReturnPayment(defaultPay);
+      setReturnDue(Math.max(0, amtDue - defaultPay));
+    } else {
+      setReturnDue(Math.max(0, amtDue - (Number(returnPayment) || 0)));
+    }
+  }, [
+    returnCount,
+    canPrice,
+    selectedTx,
+    returnPaymentTouched,
+    returnPayment,
+    activeModal,
+  ]);
 
   useEffect(() => {
     if (searchParams.get("action") === "issue") {
@@ -170,7 +305,24 @@ const Records = () => {
 
   const handleActionCansChange = (v) => {
     const n = Number(v);
-    setActionDetails({ cansCount: n, payment: n * canPrice, due: 0 });
+    const outstanding = selectedTx
+      ? selectedTx.cansIssued - selectedTx.cansReturned
+      : 0;
+    setActionDetails((p) => ({
+      ...p,
+      cansCount: n,
+      returnedCount:
+        refillMode === "exchange" ? n : Math.max(0, outstanding - n),
+      payment: n * canPrice,
+      due: 0,
+    }));
+  };
+  const handleActionReturnedChange = (v) => {
+    const n = Number(v);
+    setActionDetails((p) => ({
+      ...p,
+      returnedCount: Number.isNaN(n) ? 0 : n,
+    }));
   };
   const handleActionPayChange = (v) => {
     const val = Number(v),
@@ -199,26 +351,95 @@ const Records = () => {
     );
   };
 
+  const handleIssueNameBlur = async () => {
+    const normalizedName = newTx.villagerName.trim();
+    if (!normalizedName) return;
+
+    try {
+      const matches = await lookupVillagerMatch({ villagerName: normalizedName });
+      if (matches.length === 1) {
+        fillVillagerFromMatch(matches[0]);
+        setFormError("");
+        return;
+      }
+
+      if (matches.length > 1) {
+        setFormError(
+          "Multiple villagers have this name. Please enter phone number to load the correct details.",
+        );
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const handleIssuePhoneChange = async (value) => {
+    setNewTx((p) => ({ ...p, phone: value }));
+
+    const normalizedPhone = value.replace(/\D/g, "");
+    if (normalizedPhone.length < 10) return;
+
+    try {
+      const matches = await lookupVillagerMatch({ phone: normalizedPhone });
+      if (matches.length > 0) {
+        fillVillagerFromMatch(matches[0]);
+        setFormError("");
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
   /* ── modal helpers ───────────────────────────────────────────────────── */
   const openModal = (type, tx = null) => {
     setFormError("");
+    setSubmitAction("");
     setSelectedTx(tx);
     setActiveModal(type);
-    if (type === "return" && tx)
-      setReturnCount(tx.cansIssued - tx.cansReturned);
+    if (type === "return" && tx) {
+      const defaultReturnCount = tx.cansIssued - tx.cansReturned;
+      setReturnCount(defaultReturnCount);
+      // default payment is for returned cans
+      setReturnPayment(defaultReturnCount * canPrice);
+      setReturnPaymentTouched(false);
+      setReturnDue(
+        Math.max(0, (tx.amountDue || 0) - defaultReturnCount * canPrice),
+      );
+    }
     if ((type === "refill" || type === "extra") && tx) {
-      const cnt = type === "extra" ? 1 : tx.cansIssued;
-      setActionDetails({ cansCount: cnt, payment: cnt * canPrice, due: 0 });
+      const cnt =
+        type === "extra" ? 1 : Math.max(1, tx.cansIssued - tx.cansReturned);
+      setRefillMode("exchange");
+      setActionDetails({
+        cansCount: cnt,
+        returnedCount: cnt,
+        payment: cnt * canPrice,
+        due: 0,
+      });
+    }
+    if (type === "issue") {
+      setVillageDropdownOpen(false);
+      setVillageSearch("");
+      setSelectedVillageName("");
+      setNewTx((prev) => ({
+        ...prev,
+        villageId: "",
+      }));
     }
   };
   const closeModal = () => {
     setActiveModal(null);
     setSelectedTx(null);
     setFormError("");
+    setSubmitAction("");
+    setAddingVillageLoading(false);
+    setVillageDropdownOpen(false);
+    setVillageSearch("");
+    setSelectedVillageName("");
     setNewTx({
       villagerName: "",
       phone: "",
-      villageId: villages[0]?._id || "",
+      villageId: "",
       cansIssued: 1,
       amountPaid: canPrice,
       amountDue: 0,
@@ -229,52 +450,86 @@ const Records = () => {
   const handleIssueCans = async (e) => {
     e.preventDefault();
     setFormError("");
+    if (!newTx.villageId) {
+      setFormError("Please select or add a village");
+      return;
+    }
+    setSubmitAction("issue");
     try {
-      await axios.post(`${API}/cans`, newTx, authCfg());
+      await axios.post(
+        `${API}/cans`,
+        {
+          ...newTx,
+          clientRequestId: createRequestId(),
+        },
+        authCfg(),
+      );
       closeModal();
-      fetchData();
+      fetchTransactions(1, true);
     } catch (err) {
       setFormError(err.response?.data?.message || "Failed");
+    } finally {
+      setSubmitAction("");
     }
   };
   const handleReturnSubmit = async (e) => {
     e.preventDefault();
+    setFormError("");
+    setSubmitAction("return");
     try {
       await axios.post(
         `${API}/cans/${selectedTx._id}/return`,
-        { cansReturnedCount: returnCount },
+        {
+          cansReturnedCount: returnCount,
+          payment: Number(returnPayment) || 0,
+          due: Number(returnDue) || 0,
+          requestId: createRequestId(),
+        },
         authCfg(),
       );
       closeModal();
-      fetchData();
+      fetchTransactions(1, true);
     } catch (err) {
       setFormError(err.response?.data?.message || "Failed");
+    } finally {
+      setSubmitAction("");
     }
   };
+
   const handleRefillSubmit = async (e) => {
     e.preventDefault();
+    setFormError("");
+    setSubmitAction("refill");
     try {
       await axios.post(
         `${API}/cans/${selectedTx._id}/refill`,
         {
+          requestId: createRequestId(),
+          refillMode,
           cansRefilled: actionDetails.cansCount,
+          emptiesReturned: actionDetails.returnedCount,
           additionalPayment: actionDetails.payment,
           additionalDue: actionDetails.due,
         },
         authCfg(),
       );
       closeModal();
-      fetchData();
+      fetchTransactions(1, true);
     } catch (err) {
       setFormError(err.response?.data?.message || "Failed");
+    } finally {
+      setSubmitAction("");
     }
   };
   const handleExtraSubmit = async (e) => {
     e.preventDefault();
+    setFormError("");
+    setSubmitAction("extra");
     try {
       await axios.post(
         `${API}/cans/${selectedTx._id}/extra`,
         {
+          requestId: createRequestId(),
           extraCans: actionDetails.cansCount,
           additionalPayment: actionDetails.payment,
           additionalDue: actionDetails.due,
@@ -282,9 +537,11 @@ const Records = () => {
         authCfg(),
       );
       closeModal();
-      fetchData();
+      fetchTransactions(1, true);
     } catch (err) {
       setFormError(err.response?.data?.message || "Failed");
+    } finally {
+      setSubmitAction("");
     }
   };
   const handleDeleteConfirm = async () => {
@@ -293,16 +550,35 @@ const Records = () => {
       await axios.delete(`${API}/cans/${deleteTarget._id}`, authCfg());
       setDeleteTarget(null);
       if (previewTx?._id === deleteTarget._id) setPreviewTx(null);
-      fetchData();
+      fetchTransactions(1, true);
     } catch (e) {
       console.error(e);
     }
   };
 
   /* ── filter ──────────────────────────────────────────────────────────── */
+  const statusOptions =
+    recordsTab === "pending"
+      ? [
+          { value: "all", label: t.allLogs },
+          { value: "pending", label: t.pending },
+          { value: "partially_returned", label: t.partiallyReturned },
+          { value: "overdue", label: t.overdue },
+        ]
+      : [
+          { value: "all", label: t.allLogs },
+          { value: "returned", label: t.returned },
+        ];
+
   const filteredTxs = transactions.filter((tx) => {
-    const q = search.toLowerCase();
+    const q = debouncedSearch;
+    const inTab =
+      recordsTab === "pending"
+        ? tx.status !== "returned"
+        : tx.status === "returned";
+
     return (
+      inTab &&
       (tx.villagerName.toLowerCase().includes(q) ||
         tx.phone.includes(q) ||
         tx.village?.name?.toLowerCase().includes(q)) &&
@@ -334,6 +610,15 @@ const Records = () => {
         {formError}
       </div>
     ) : null;
+
+  const getSubmitLabel = (active, label, loadingLabel) => (
+    <>
+      {submitAction === active && (
+        <LoaderCircle size={16} className="inline-spinner" />
+      )}
+      <span>{submitAction === active ? loadingLabel : label}</span>
+    </>
+  );
 
   const CostBadge = ({ count, price }) => (
     <div className="cost-badge">
@@ -409,12 +694,29 @@ const Records = () => {
           />
           <input
             type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             placeholder={t.searchPlaceholder}
             className="glass-input"
             style={{ paddingLeft: "42px" }}
           />
+        </div>
+        <div className="records-tabs" role="tablist" aria-label="Record tabs">
+          {[
+            { key: "pending", label: t.activeRecords },
+            { key: "completed", label: t.completedRecords },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              role="tab"
+              aria-selected={recordsTab === tab.key}
+              className={`records-tab ${recordsTab === tab.key ? "is-active" : ""}`}
+              onClick={() => setRecordsTab(tab.key)}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
           <span
@@ -432,11 +734,11 @@ const Records = () => {
             className="glass-input"
             style={{ padding: "10px 14px" }}
           >
-            <option value="all">{t.allLogs}</option>
-            <option value="pending">{t.pending}</option>
-            <option value="partially_returned">{t.partiallyReturned}</option>
-            <option value="returned">{t.returned}</option>
-            <option value="overdue">{t.overdue}</option>
+            {statusOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
           </select>
         </div>
       </div>
@@ -465,7 +767,7 @@ const Records = () => {
             {t.noRecords}
           </div>
         ) : (
-          <>
+          <div key={recordsTab} className="records-content">
             {/* ══ DESKTOP TABLE ══ */}
             <div className="table-container desktop-only">
               <table className="custom-table">
@@ -534,14 +836,23 @@ const Records = () => {
                           <td>
                             <div className="can-progress-wrap">
                               <span style={{ fontSize: "13px" }}>
-                                <strong>{tx.cansReturned}</strong>/
-                                {tx.cansIssued}
+                                <strong>
+                                  {tx.cansIssued - tx.cansReturned}
+                                </strong>
+                                <span
+                                  style={{
+                                    marginLeft: 4,
+                                    color: "var(--text-secondary)",
+                                  }}
+                                >
+                                  {t.cansOutstanding}
+                                </span>
                               </span>
                               <div className="can-progress-bar">
                                 <div
                                   className="can-progress-fill"
                                   style={{
-                                    width: `${Math.round((tx.cansReturned / tx.cansIssued) * 100)}%`,
+                                    width: `${Math.round(((tx.cansIssued - tx.cansReturned) / tx.cansIssued) * 100)}%`,
                                     background: color,
                                   }}
                                 />
@@ -630,19 +941,21 @@ const Records = () => {
                                 {t.deleteBtn}
                               </button>
                               {/* WhatsApp on desktop too */}
-                              <a
-                                href={makeWhatsAppLink(tx)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="action-pill"
-                                style={{
-                                  "--pill-color": "#25D366",
-                                  textDecoration: "none",
-                                }}
-                              >
-                                <MessageSquare size={13} />
-                                WA
-                              </a>
+                              {tx.status !== "returned" && (
+                                <a
+                                  href={makeWhatsAppLink(tx)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="action-pill"
+                                  style={{
+                                    "--pill-color": "#25D366",
+                                    textDecoration: "none",
+                                  }}
+                                >
+                                  <MessageSquare size={13} />
+                                  WA
+                                </a>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -700,7 +1013,10 @@ const Records = () => {
                       <div className="card-min-sub">
                         <span
                           className="village-chip"
-                          style={{ fontSize: "10px", padding: "2px 7px" }}
+                          style={{
+                            fontSize: "0.625rem",
+                            padding: "0.15rem 0.45rem",
+                          }}
                         >
                           {tx.village?.name || "—"}
                         </span>
@@ -730,7 +1046,29 @@ const Records = () => {
                 );
               })}
             </div>
-          </>
+            {loadingMore && (
+              <div
+                style={{
+                  padding: "18px 0",
+                  textAlign: "center",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                Loading more records...
+              </div>
+            )}
+            {!hasMore && !loading && (
+              <div
+                style={{
+                  padding: "18px 0",
+                  textAlign: "center",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                All records loaded.
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -805,7 +1143,7 @@ const Records = () => {
                   className="sheet-stat-val"
                   style={{ color: statusColor(previewTx.status) }}
                 >
-                  {previewTx.cansReturned}
+                  {previewTx.cansIssued - previewTx.cansReturned}
                   <span
                     style={{
                       fontSize: 12,
@@ -813,7 +1151,7 @@ const Records = () => {
                       color: "var(--text-muted)",
                     }}
                   >
-                    /{previewTx.cansIssued}
+                    {` ${t.cansOutstanding}`}
                   </span>
                 </div>
                 <div className="sheet-can-bar">
@@ -878,15 +1216,17 @@ const Records = () => {
                 <Phone size={18} />
                 <span>{previewTx.phone}</span>
               </a>
-              <a
-                href={makeWhatsAppLink(previewTx)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="sheet-contact-btn sheet-contact-btn--wa"
-              >
-                <MessageSquare size={18} />
-                <span>WhatsApp</span>
-              </a>
+              {previewTx.status !== "returned" && (
+                <a
+                  href={makeWhatsAppLink(previewTx)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="sheet-contact-btn sheet-contact-btn--wa"
+                >
+                  <MessageSquare size={18} />
+                  <span>WhatsApp</span>
+                </a>
+              )}
             </div>
 
             {/* ── Action Buttons ── */}
@@ -1056,6 +1396,7 @@ const Records = () => {
                   onChange={(e) =>
                     setNewTx((p) => ({ ...p, villagerName: e.target.value }))
                   }
+                  onBlur={handleIssueNameBlur}
                   className="glass-input"
                   placeholder={t.enterName}
                   required
@@ -1065,29 +1406,234 @@ const Records = () => {
                 <input
                   type="tel"
                   value={newTx.phone}
-                  onChange={(e) =>
-                    setNewTx((p) => ({ ...p, phone: e.target.value }))
-                  }
+                  onChange={(e) => handleIssuePhoneChange(e.target.value)}
                   className="glass-input"
                   placeholder={t.enterPhone}
                   required
                 />
               </FormField>
               <FormField label={t.selectVillage}>
-                <select
-                  value={newTx.villageId}
-                  onChange={(e) =>
-                    setNewTx((p) => ({ ...p, villageId: e.target.value }))
-                  }
-                  className="glass-input"
-                  required
+                <div
+                  ref={villageDropdownRef}
+                  style={{ position: "relative" }}
                 >
-                  {villages.map((v) => (
-                    <option key={v._id} value={v._id}>
-                      {v.name}
-                    </option>
-                  ))}
-                </select>
+                  <button
+                    type="button"
+                    className="glass-input village-trigger"
+                    onClick={() => {
+                      setVillageDropdownOpen((prev) => !prev);
+                      setVillageSearch("");
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: selectedVillageName
+                          ? "var(--text-primary)"
+                          : "var(--text-muted)",
+                      }}
+                    >
+                      {selectedVillageName || t.villagePlaceholder}
+                    </span>
+                    <ChevronDown
+                      size={16}
+                      style={{
+                        transform: villageDropdownOpen
+                          ? "rotate(180deg)"
+                          : "rotate(0deg)",
+                        transition: "transform 0.2s ease",
+                      }}
+                    />
+                  </button>
+                  {villageDropdownOpen && (
+                    <div
+                      className="village-dropdown"
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        right: 0,
+                        top: "calc(100% + 8px)",
+                        background: "var(--card-bg)",
+                        border: "1px solid var(--glass-border)",
+                        borderRadius: 10,
+                        maxHeight: 220,
+                        overflowY: "auto",
+                        zIndex: 1200,
+                        padding: 8,
+                      }}
+                    >
+                      <div style={{ marginBottom: 8 }}>
+                        <input
+                          type="text"
+                          className="glass-input"
+                          placeholder={t.searchVillagesOrAdd}
+                          value={villageSearch}
+                          autoFocus
+                          onChange={(e) => setVillageSearch(e.target.value)}
+                          onKeyDown={async (e) => {
+                            if (e.key !== "Enter") return;
+
+                            e.preventDefault();
+                            const typedVillage = villageSearch.trim();
+                            if (!typedVillage) return;
+
+                            const exactVillage = villages.find(
+                              (v) =>
+                                v.name.toLowerCase() ===
+                                typedVillage.toLowerCase(),
+                            );
+
+                            if (exactVillage) {
+                              setNewTx((p) => ({
+                                ...p,
+                                villageId: exactVillage._id,
+                              }));
+                              setSelectedVillageName(exactVillage.name);
+                              setVillageSearch("");
+                              setVillageDropdownOpen(false);
+                              return;
+                            }
+
+                            setAddingVillageLoading(true);
+                            setFormError("");
+                            try {
+                              const response = await axios.post(
+                                `${API}/villages`,
+                                { name: typedVillage },
+                                authCfg(),
+                              );
+                              const village = response.data;
+                              setVillages((prev) =>
+                                [...prev, village].sort((a, b) =>
+                                  a.name.localeCompare(b.name),
+                                ),
+                              );
+                              setNewTx((p) => ({
+                                ...p,
+                                villageId: village._id,
+                              }));
+                              setSelectedVillageName(village.name);
+                              setVillageSearch("");
+                              setVillageDropdownOpen(false);
+                            } catch (err) {
+                              setFormError(
+                                err.response?.data?.message ||
+                                  "Failed to add village",
+                              );
+                            } finally {
+                              setAddingVillageLoading(false);
+                            }
+                          }}
+                        />
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 6,
+                        }}
+                      >
+                        {villages
+                          .filter((v) =>
+                            v.name
+                              .toLowerCase()
+                              .includes(villageSearch.toLowerCase()),
+                          )
+                          .map((v) => (
+                            <button
+                              key={v._id}
+                              type="button"
+                              onClick={() => {
+                                setNewTx((p) => ({ ...p, villageId: v._id }));
+                                setSelectedVillageName(v.name);
+                                setVillageDropdownOpen(false);
+                                setVillageSearch("");
+                                setFormError("");
+                              }}
+                              className="action-pill"
+                              style={{ textAlign: "left", width: "100%" }}
+                            >
+                              {v.name}
+                            </button>
+                          ))}
+
+                        {villages.filter((v) =>
+                          v.name
+                            .toLowerCase()
+                            .includes(villageSearch.toLowerCase()),
+                        ).length === 0 && (
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              gap: 8,
+                              padding: "10px 8px",
+                              borderRadius: 10,
+                              background: "rgba(255,255,255,0.04)",
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: "13px",
+                                color: "var(--text-secondary)",
+                              }}
+                            >
+                              {villageSearch.trim()
+                                ? `"${villageSearch.trim()}"`
+                                : t.searchVillagesOrAdd}
+                            </span>
+                            <button
+                              type="button"
+                              className="btn-primary"
+                              onClick={async () => {
+                                if (!villageSearch.trim()) return;
+                                setAddingVillageLoading(true);
+                                setFormError("");
+                                try {
+                                  const r = await axios.post(
+                                    `${API}/villages`,
+                                    { name: villageSearch.trim() },
+                                    authCfg(),
+                                  );
+                                  const v = r.data;
+                                  setVillages((prev) =>
+                                    [...prev, v].sort((a, b) =>
+                                      a.name.localeCompare(b.name),
+                                    ),
+                                  );
+                                  setNewTx((p) => ({ ...p, villageId: v._id }));
+                                  setSelectedVillageName(v.name);
+                                  setVillageSearch("");
+                                  setVillageDropdownOpen(false);
+                                } catch (err) {
+                                  setFormError(
+                                    err.response?.data?.message ||
+                                      "Failed to add village",
+                                  );
+                                } finally {
+                                  setAddingVillageLoading(false);
+                                }
+                              }}
+                              disabled={addingVillageLoading}
+                            >
+                              {addingVillageLoading ? (
+                                <>
+                                  <LoaderCircle
+                                    size={16}
+                                    className="inline-spinner"
+                                  />
+                                  <span>{t.adding}</span>
+                                </>
+                              ) : (
+                                t.addVillage
+                              )}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </FormField>
               <CostBadge count={newTx.cansIssued || 0} price={canPrice} />
               <div
@@ -1136,8 +1682,9 @@ const Records = () => {
                 type="submit"
                 className="btn-primary"
                 style={{ marginTop: "6px" }}
+                disabled={submitAction === "issue" || addingVillageLoading}
               >
-                {t.confirmSave}
+                {getSubmitLabel("issue", t.confirmSave, t.saving)}
               </button>
             </form>
           </div>
@@ -1179,6 +1726,35 @@ const Records = () => {
                   required
                 />
               </FormField>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 10,
+                }}
+              >
+                <FormField label={t.returnPayment}>
+                  <input
+                    type="number"
+                    min="0"
+                    value={returnPayment}
+                    onChange={(e) => {
+                      setReturnPaymentTouched(true);
+                      setReturnPayment(Number(e.target.value));
+                    }}
+                    className="glass-input"
+                  />
+                </FormField>
+                <FormField label={t.returnDue}>
+                  <input
+                    type="number"
+                    min="0"
+                    value={returnDue}
+                    onChange={(e) => setReturnDue(Number(e.target.value))}
+                    className="glass-input"
+                  />
+                </FormField>
+              </div>
               <button
                 type="submit"
                 className="btn-primary"
@@ -1187,8 +1763,9 @@ const Records = () => {
                     "linear-gradient(135deg,var(--status-returned),#059669)",
                   boxShadow: "0 4px 14px rgba(16,185,129,0.3)",
                 }}
+                disabled={submitAction === "return"}
               >
-                {t.confirmReturn}
+                {getSubmitLabel("return", t.confirmReturn, t.saving)}
               </button>
             </form>
           </div>
@@ -1203,20 +1780,74 @@ const Records = () => {
               title={`${t.refillModal}: ${selectedTx.villagerName}`}
               onClose={closeModal}
             />
-            <p
-              style={{
-                fontSize: "14px",
-                color: "var(--text-secondary)",
-                marginBottom: "16px",
-              }}
-            >
-              {t.refillDesc}
-            </p>
             <FormError />
             <form
               onSubmit={handleRefillSubmit}
               style={{ display: "flex", flexDirection: "column", gap: "14px" }}
             >
+              <div style={{ display: "grid", gap: "8px" }}>
+                <label style={{ fontSize: "14px", fontWeight: 600 }}>
+                  {t.refillCaseLabel}
+                </label>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "12px",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  {[
+                    { value: "exchange", label: t.refillCaseExchange },
+                    { value: "net", label: t.refillCaseNet },
+                  ].map((option) => (
+                    <label
+                      key={option.value}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        padding: "10px 12px",
+                        borderRadius: "999px",
+                        border:
+                          refillMode === option.value
+                            ? "1px solid var(--status-pending)"
+                            : "1px solid rgba(148,163,184,0.4)",
+                        background:
+                          refillMode === option.value
+                            ? "rgba(34,211,238,0.08)"
+                            : "rgba(255,255,255,0.04)",
+                        cursor: "pointer",
+                        color:
+                          refillMode === option.value
+                            ? "var(--text-primary)"
+                            : "var(--text-secondary)",
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="refillMode"
+                        value={option.value}
+                        checked={refillMode === option.value}
+                        onChange={() => {
+                          setRefillMode(option.value);
+                          const outstanding = selectedTx
+                            ? selectedTx.cansIssued - selectedTx.cansReturned
+                            : 0;
+                          setActionDetails((p) => ({
+                            ...p,
+                            returnedCount:
+                              option.value === "exchange"
+                                ? p.cansCount
+                                : Math.max(0, outstanding - p.cansCount),
+                          }));
+                        }}
+                      />
+                      {option.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
               <FormField label={t.cansRefilled}>
                 <input
                   type="number"
@@ -1227,6 +1858,27 @@ const Records = () => {
                   required
                 />
               </FormField>
+              {refillMode === "net" && (
+                <FormField label={t.emptiesReturned}>
+                  <input
+                    type="number"
+                    min="0"
+                    max={
+                      selectedTx
+                        ? selectedTx.cansIssued - selectedTx.cansReturned
+                        : undefined
+                    }
+                    value={
+                      actionDetails.returnedCount === 0
+                        ? "0"
+                        : actionDetails.returnedCount || ""
+                    }
+                    onChange={(e) => handleActionReturnedChange(e.target.value)}
+                    className="glass-input"
+                    required
+                  />
+                </FormField>
+              )}
               <CostBadge
                 count={actionDetails.cansCount || 0}
                 price={canPrice}
@@ -1267,8 +1919,12 @@ const Records = () => {
                 onPaid={() => setActionQuick("paid")}
                 onDue={() => setActionQuick("due")}
               />
-              <button type="submit" className="btn-primary">
-                {t.confirmRefill}
+              <button
+                type="submit"
+                className="btn-primary"
+                disabled={submitAction === "refill"}
+              >
+                {getSubmitLabel("refill", t.confirmRefill, t.saving)}
               </button>
             </form>
           </div>
@@ -1355,8 +2011,9 @@ const Records = () => {
                     "linear-gradient(135deg,var(--status-pending),#d97706)",
                   boxShadow: "0 4px 14px rgba(251,191,36,0.2)",
                 }}
+                disabled={submitAction === "extra"}
               >
-                {t.confirmExtras}
+                {getSubmitLabel("extra", t.confirmExtras, t.saving)}
               </button>
             </form>
           </div>
@@ -1426,40 +2083,65 @@ const AuditLog = ({ tx, t }) => (
         {t.noAuditLogs}
       </p>
     ) : (
-      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-        {tx.subTransactions.map((sub, i) => (
-          <div
-            key={sub._id || i}
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              padding: "7px 10px",
-              background: "var(--audit-bg)",
-              borderRadius: "8px",
-              fontSize: "12px",
-              flexWrap: "wrap",
-              gap: "4px",
-            }}
-          >
-            <strong
+      <div className="sheet-audit-list">
+        {tx.subTransactions.map((sub, i) => {
+          const labelMap = {
+            issue: "ISSUE",
+            refill: "REFILL",
+            extra: "EXTRA",
+            return: "RETURN",
+          };
+          const label =
+            labelMap[sub.actionType] || sub.actionType.toUpperCase();
+          return (
+            <div
+              key={sub._id || i}
               style={{
-                color:
-                  sub.actionType === "refill"
-                    ? "var(--primary-cyan)"
-                    : "var(--status-pending)",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "10px 12px",
+                background: "var(--audit-bg)",
+                borderRadius: "10px",
+                fontSize: "12px",
+                flexWrap: "wrap",
+                gap: "8px",
               }}
             >
-              {sub.actionType.toUpperCase()} — {sub.cansCount} cans
-            </strong>
-            <span style={{ color: "var(--status-returned)" }}>
-              ₹{sub.additionalPayment} {t.paid}
-            </span>
-            <span style={{ color: "var(--text-muted)" }}>
-              {new Date(sub.timestamp).toLocaleDateString()}
-            </span>
-          </div>
-        ))}
+              <div style={{ minWidth: "150px", lineHeight: 1.3 }}>
+                <strong>{label}</strong>
+                <div style={{ color: "var(--text-secondary)" }}>
+                  {sub.cansCount} cans
+                </div>
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  gap: "8px",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                }}
+              >
+                <span style={{ color: "var(--status-returned)" }}>
+                  ₹{sub.additionalPayment} {t.paid}
+                </span>
+                <span style={{ color: "var(--text-muted)" }}>
+                  {sub.actionType === "return"
+                    ? `Remaining Due ₹${sub.resultingDue}`
+                    : sub.additionalDue > 0
+                      ? `Due ₹${sub.additionalDue}`
+                      : "No due"}
+                </span>
+                <span style={{ color: "var(--text-secondary)" }}>
+                  Balance ₹{sub.resultingDue}
+                </span>
+                <span style={{ color: "var(--text-muted)" }}>
+                  {new Date(sub.timestamp).toLocaleDateString()}
+                </span>
+              </div>
+            </div>
+          );
+        })}
       </div>
     )}
   </div>

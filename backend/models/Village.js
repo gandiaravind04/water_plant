@@ -13,6 +13,11 @@ const villageSchema = new mongoose.Schema({
   },
 });
 
+villageSchema.index(
+  { name: 1 },
+  { unique: true, collation: { locale: "en", strength: 2 } },
+);
+
 const Village = mongoose.model('Village', villageSchema);
 
 export default Village;
